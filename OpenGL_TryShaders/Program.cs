@@ -25,6 +25,7 @@ partial class Program
 
     static long stepCounter = 0;
     static Vector2? lastMousePos = null;
+    static int brushSize = 1; // радиус кисти (1 => 3x3)
 
     static void Main()
     {
@@ -137,6 +138,18 @@ partial class Program
                 Console.WriteLine($"Manual step {++stepCounter}");
             }
 
+            if (kb.IsKeyPressed(Keys.LeftBracket)) // [
+            {
+                brushSize = Math.Max(0, brushSize - 1);
+                Console.WriteLine($"Brush size: {brushSize}");
+            }
+
+            if (kb.IsKeyPressed(Keys.RightBracket)) // ]
+            {
+                brushSize = Math.Min(100, brushSize + 1);
+                Console.WriteLine($"Brush size: {brushSize}");
+            }
+
 
         };
 
@@ -192,15 +205,14 @@ partial class Program
 
         if ((left || right) && lastMousePos.HasValue)
         {
-            DrawLineCells(window, lastMousePos.Value, mousePos, left, brushSize: 2);
+            DrawLineCells(window, lastMousePos.Value, mousePos, left, brushSize);
         }
-        else if (left)
+        else if (left || right)
         {
-            SetCellState(window, mousePos, true);
-        }
-        else if (right)
-        {
-            SetCellState(window, mousePos, false);
+            // просто одна клетка под курсором
+            int cx = (int)(mousePos.X / window.ClientSize.X * gridWidth);
+            int cy = (int)((1.0f - mousePos.Y / window.ClientSize.Y) * gridHeight);
+            SetCellWithBrush(cx, cy, left, brushSize);
         }
 
         if (left || right)
@@ -210,7 +222,7 @@ partial class Program
     }
 
 
-    static void DrawLineCells(GameWindow window, Vector2 from, Vector2 to, bool alive, int brushSize = 1)
+    static void DrawLineCells(GameWindow window, Vector2 from, Vector2 to, bool alive, int brushSize)
     {
         int x0 = (int)(from.X / window.ClientSize.X * gridWidth);
         int y0 = (int)((1.0f - from.Y / window.ClientSize.Y) * gridHeight);
@@ -234,7 +246,7 @@ partial class Program
     }
 
 
-    static void SetCellWithBrush(int cx, int cy, bool alive, int brushSize = 1)
+    static void SetCellWithBrush(int cx, int cy, bool alive, int brushSize)
     {
         byte value = alive ? (byte)255 : (byte)0;
 
