@@ -34,7 +34,21 @@ partial class Program
     static int[] birth = new int[9];
     static int[] survival = new int[9];
 
+    const int MaxTypes = 16;          // сколько типов поддерживаем
+    static int ruleTex = 0;           // текстура правил B/S
+    static byte[] ruleData = new byte[MaxTypes * 9 * 2]; // 9 соседей × 2 канала (R=B, G=S) на тип
+
+    // (если ещё нет)
+    static int typeColorTex = 0;      // LUT цветов типов (16×1 RGBA8)
+    static byte[] typeColors = new byte[MaxTypes * 4];
+
+    static int currentBrushType = 0;  // какой тип рисуем (0..MaxTypes-1)
+
     static int locBirth, locSurvival;
+    internal static readonly int[] int32Array = new int[] { 3 };
+
+    byte[] pxAliveType(byte alive, byte type) => new byte[] { alive, type, 0, 255 };
+
     static void Main()
     {
         var settings = new NativeWindowSettings
@@ -47,7 +61,6 @@ partial class Program
 
         window.Load += () =>
         {
-
             Array.Clear(birth, 0, 9);
             Array.Clear(survival, 0, 9);
 
@@ -85,6 +98,21 @@ partial class Program
             int vs = CompileShader(LoadEmbedded("Shaders.fullscreen.vert"), ShaderType.VertexShader);
             int fsUpdate = CompileShader(LoadEmbedded("Shaders.gol_update.frag"), ShaderType.FragmentShader);
             int fsBlit = CompileShader(LoadEmbedded("Shaders.blit.frag"), ShaderType.FragmentShader);
+
+            // --- правила ---
+            InitRuleTexture();
+            SetRule(0, int32Array, [2, 3]); // Conway B3/S23
+            UploadRules();
+
+            // --- цвета ---
+            InitTypeColorTexture();
+            SetTypeColor(0, 255, 255, 255); // Conway белый
+            UploadTypeColors();
+
+            // текущая кисть всегда Conway
+            currentBrushType = 0;
+
+
 
             updateShaderProgram = LinkProgram(vs, fsUpdate);
             blitShaderProgram = LinkProgram(vs, fsBlit);
@@ -241,6 +269,7 @@ partial class Program
         GL.DeleteFramebuffer(framebuffer);
     }
 
+
     // ===== helpers =====
 
     //static void PrintStep(long steps, double stepsPerSec)
@@ -250,6 +279,75 @@ partial class Program
     //    Console.Write($"Step: {steps} | Speed: {stepsPerSec:F1} steps/sec    ");
     //    Console.SetCursorPosition(0, top); // вернём курсор назад
     //}
+
+    static void InitRuleTexture()
+    {
+        ruleTex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, ruleTex);
+
+        // Текстура 9×MaxTypes, формат RG8 (R = Birth, G = Survival)
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rg8,
+                      9, MaxTypes, 0, PixelFormat.Rg, PixelType.UnsignedByte, IntPtr.Zero);
+
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+    }
+
+    static void SetRule(int type, int[] birth, int[] survival)
+    {
+        // type — индекс строки в LUT (0..MaxTypes-1)
+        for (int n = 0; n < 9; n++)
+        {
+            bool b = Array.IndexOf(birth, n) >= 0;
+            bool s = Array.IndexOf(survival, n) >= 0;
+            int baseIdx = (type * 9 + n) * 2;
+            ruleData[baseIdx + 0] = (byte)(b ? 255 : 0); // R = Birth
+            ruleData[baseIdx + 1] = (byte)(s ? 255 : 0); // G = Survival
+        }
+    }
+
+    static void UploadRules()
+    {
+        GL.BindTexture(TextureTarget.Texture2D, ruleTex);
+        GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, 9, MaxTypes,
+                         PixelFormat.Rg, PixelType.UnsignedByte, ruleData);
+    }
+
+
+    static void SetTypeColor(int type, byte r, byte g, byte b)
+    {
+        int i = type * 4;
+        typeColors[i + 0] = r;
+        typeColors[i + 1] = g;
+        typeColors[i + 2] = b;
+        typeColors[i + 3] = 255; // alpha
+    }
+
+    static void UploadTypeColors()
+    {
+        GL.BindTexture(TextureTarget.Texture2D, typeColorTex);
+        GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, MaxTypes, 1,
+                         PixelFormat.Rgba, PixelType.UnsignedByte, typeColors);
+    }
+
+    static void InitTypeColorTexture()
+    {
+        typeColorTex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, typeColorTex);
+
+        // создаём текстуру 16x1 RGBA8
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
+                      MaxTypes, 1, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+    }
+
+
     static void SetRules(int[] birthNums, int[] survivalNums)
     {
         Array.Clear(birth, 0, 9);
@@ -309,24 +407,25 @@ partial class Program
     }
     static void FillRandomShapes()
     {
-        // очистим поле
-        //GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
-        //byte[] empty = new byte[gridWidth * gridHeight];
-        //GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, gridWidth, gridHeight,
-        //                 PixelFormat.Red, PixelType.UnsignedByte, empty);
-
         Random rnd = new Random();
+
+        // привязка текстуры перед записью
+        GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
+        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
 
         int shapeCount = rnd.Next(10, 30); // количество фигур
         for (int i = 0; i < shapeCount; i++)
         {
-            int w = rnd.Next(5, gridWidth/shapeCount);  // ширина фигуры
-            int h = rnd.Next(5, gridHeight/shapeCount + (gridHeight/2 - rnd.Next(0, gridHeight/2)));  // высота фигуры
+            int w = rnd.Next(5, gridWidth / shapeCount); // ширина фигуры
+            int h = rnd.Next(5, gridHeight/shapeCount + (gridHeight/2 - rnd.Next(0, gridHeight/2))); // высота фигуры
             int cx = rnd.Next(0, gridWidth - w);
             int cy = rnd.Next(0, gridHeight - h);
 
-            // выбираем тип фигуры: 0 = прямоугольник, 1 = круг
-            int type = rnd.Next(2);
+            // форма: 0 = прямоугольник, 1 = круг
+            int shapeType = rnd.Next(2);
+
+            // выбираем "правило-тип" для клеток фигуры
+            byte cellType = (byte)rnd.Next(0, 4); // например, от 0 до 3 (Conway, HighLife, Seeds, Day&Night)
 
             for (int x = 0; x < w; x++)
             {
@@ -336,7 +435,7 @@ partial class Program
                     int py = cy + y;
 
                     bool inside = true;
-                    if (type == 1) // круг
+                    if (shapeType == 1) // круг
                     {
                         float dx = x - w / 2f;
                         float dy = y - h / 2f;
@@ -345,9 +444,16 @@ partial class Program
 
                     if (inside && px >= 0 && py >= 0 && px < gridWidth && py < gridHeight)
                     {
-                        byte val = 255;
+                        byte[] rgba = new byte[]
+                        {
+                        255,         // R = alive
+                        cellType,    // G = тип
+                        0,           // B (резерв)
+                        255          // A
+                        };
+
                         GL.TexSubImage2D(TextureTarget.Texture2D, 0, px, py, 1, 1,
-                                         PixelFormat.Red, PixelType.UnsignedByte, new byte[] { val });
+                                         PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
                     }
                 }
             }
@@ -356,6 +462,7 @@ partial class Program
         GL.BindTexture(TextureTarget.Texture2D, 0);
         Console.WriteLine($"Random shapes placed: {shapeCount}");
     }
+
 
 
     static void HandleDrawing(GameWindow window, Vector2 mousePos)
@@ -408,25 +515,21 @@ partial class Program
 
     static void SetCellWithBrush(int cx, int cy, bool alive, int brushSize)
     {
-        byte value = alive ? (byte)255 : (byte)0;
+        byte a = (byte)(alive ? 255 : 0);
+        byte t = (byte)currentBrushType;
 
         GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
         GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
 
         for (int dx = -brushSize; dx <= brushSize; dx++)
-        {
             for (int dy = -brushSize; dy <= brushSize; dy++)
             {
-                int x = cx + dx;
-                int y = cy + dy;
-                if (x >= 0 && y >= 0 && x < gridWidth && y < gridHeight)
-                {
-                    GL.TexSubImage2D(TextureTarget.Texture2D, 0, x, y, 1, 1,
-                                     PixelFormat.Red, PixelType.UnsignedByte, new byte[] { value });
-                }
+                int x = cx + dx, y = cy + dy;
+                if (x < 0 || y < 0 || x >= gridWidth || y >= gridHeight) continue;
+                byte[] px = new byte[] { a, t, 0, 255 };
+                GL.TexSubImage2D(TextureTarget.Texture2D, 0, x, y, 1, 1,
+                                 PixelFormat.Rgba, PixelType.UnsignedByte, px);
             }
-        }
-
         GL.BindTexture(TextureTarget.Texture2D, 0);
     }
 
@@ -504,6 +607,15 @@ partial class Program
         GL.Viewport(0, 0, gridWidth, gridHeight);
 
         GL.UseProgram(updateShaderProgram);
+
+
+        //ToRefactor  (Можно кэшировать locRuleTex в window.Load, и тогда в шаге только BindTexture.)
+        int locRuleTex = GL.GetUniformLocation(updateShaderProgram, "ruleTex");
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, ruleTex);
+        GL.Uniform1(locRuleTex, 1);
+
+
         int locState = GL.GetUniformLocation(updateShaderProgram, "currentState");
         int locTexel = GL.GetUniformLocation(updateShaderProgram, "texelSize");
 
@@ -546,6 +658,12 @@ partial class Program
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
         GL.Uniform1(locState2, 0);
+
+        int locTypeColors = GL.GetUniformLocation(blitShaderProgram, "typeColors");
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, typeColorTex);
+        GL.Uniform1(locTypeColors, 1);
+
 
         GL.BindVertexArray(quadVAO);
         GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
@@ -600,20 +718,26 @@ partial class Program
         GL.BindTexture(TextureTarget.Texture2D, tex);
 
         // выделяем R8
-        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R8, w, h, 0,
-                      PixelFormat.Red, PixelType.UnsignedByte, IntPtr.Zero);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, w, h, 0,
+               PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
 
-        // заполняем данными
-        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1); // 1 байт/пиксель
-        byte[] data = new byte[w * h];
+        // заполнение:
+        byte[] data = new byte[w * h * 4];
         if (randomInit)
         {
             var rnd = new Random();
-            for (int i = 0; i < data.Length; i++)
-                data[i] = (byte)(rnd.Next(2) == 0 ? 255 : 0); // 50% живых для наглядности
+            for (int i = 0; i < w * h; i++)
+            {
+                bool alive = rnd.Next(2) == 0;
+                byte type = (byte)(rnd.Next(3)); // 0..2 для примера
+                data[i * 4 + 0] = (byte)(alive ? 255 : 0); // R alive
+                data[i * 4 + 1] = type;                    // G type
+                data[i * 4 + 2] = 0;                       // B (свободно)
+                data[i * 4 + 3] = 255;                     // A
+            }
         }
         GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, w, h,
-                         PixelFormat.Red, PixelType.UnsignedByte, data);
+                         PixelFormat.Rgba, PixelType.UnsignedByte, data);
 
         GL.BindTexture(TextureTarget.Texture2D, 0);
         return tex;
