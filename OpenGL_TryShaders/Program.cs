@@ -23,10 +23,18 @@ partial class Program
     static double stepInterval = 0.1;   // шаг каждые 0.1с = ~10 шаг/сек
     static double timeAccumulator = 0.0;
 
-    static long stepCounter = 0;
+    static long stepCounter { get; set; }
+    static long stepCounterSpeed = 0;
+    static double lastPrintTime = 0;
+    static double lastSpeed = 0;
     static Vector2? lastMousePos = null;
     static int brushSize = 1; // радиус кисти (1 => 3x3)
+    static double timeSincePrint = 0;
 
+    const double maxFps = 240;
+    long frameCounter = 0;
+
+    static DateTime lastInfoTime = DateTime.Now;
     static void Main()
     {
         var settings = new NativeWindowSettings
@@ -108,15 +116,16 @@ partial class Program
 
             if (kb.IsKeyPressed(Keys.Up))
             {
-                stepInterval = Math.Max(0.001, stepInterval - 0.01); // быстрее
+                stepInterval = Math.Max(0.001, stepInterval * 0.8); // быстрее (уменьшаем интервал)
                 window.Title = $"Game of Life — speed: {1.0 / stepInterval:F1} steps/sec";
             }
 
             if (kb.IsKeyPressed(Keys.Down))
             {
-                stepInterval = Math.Min(1.0, stepInterval + 0.01); // медленнее
+                stepInterval = Math.Min(10.0, stepInterval * 1.25); // медленнее (увеличиваем интервал)
                 window.Title = $"Game of Life — speed: {1.0 / stepInterval:F1} steps/sec";
             }
+
 
             if (kb.IsKeyPressed(Keys.Equal) || kb.IsKeyPressed(Keys.KeyPadAdd))
             {
@@ -135,7 +144,7 @@ partial class Program
             if (kb.IsKeyPressed(Keys.Enter))
             {
                 DoSimulationStep();
-                Console.WriteLine($"Manual step {++stepCounter}");
+                Console.WriteLine($"Manual step {AddSteps()}");
             }
 
             if (kb.IsKeyPressed(Keys.LeftBracket)) // [
@@ -148,6 +157,11 @@ partial class Program
             {
                 brushSize = Math.Min(100, brushSize + 1);
                 Console.WriteLine($"Brush size: {brushSize}");
+            }
+
+            if (kb.IsKeyPressed(Keys.R))
+            {
+                FillRandomShapes();
             }
 
 
@@ -179,6 +193,14 @@ partial class Program
                 }
             }
 
+            timeSincePrint += args.Time;
+            if (timeSincePrint >= 0.2) // раз в секунду
+            {
+                PrintInfo();
+                timeSincePrint = 0;
+            }
+
+
             BlitToScreen(window);
 
             window.SwapBuffers(); // важно!
@@ -197,6 +219,102 @@ partial class Program
     }
 
     // ===== helpers =====
+
+    //static void PrintStep(long steps, double stepsPerSec)
+    //{
+    //    int top = Console.CursorTop;   // запомним текущую строку
+    //    Console.SetCursorPosition(0, 0);
+    //    Console.Write($"Step: {steps} | Speed: {stepsPerSec:F1} steps/sec    ");
+    //    Console.SetCursorPosition(0, top); // вернём курсор назад
+    //}
+
+    static void PrintInfo()
+    {
+        double now = DateTime.Now.Ticks / (double)TimeSpan.TicksPerSecond;
+        double dt = now - lastPrintTime;
+
+        if (dt >= 0.2) // обновляем раз в 0.2 сек
+        {
+            lastSpeed = stepCounterSpeed / dt;
+            stepCounterSpeed = 0;
+            lastPrintTime = now;
+        }
+
+        // всегда пишем с первой строки
+        Console.SetCursorPosition(0, 0);
+
+        // очищаем блок (например, 6 строк, чтобы стереть старое)
+        for (int i = 0; i < 6; i++)
+        {
+            Console.WriteLine(new string(' ', Console.WindowWidth));
+        }
+        Console.SetCursorPosition(0, 0);
+
+        // печатаем блок инфы
+        Console.WriteLine($"Step: {stepCounter} | Speed: {lastSpeed:F1} steps/sec | Field: {gridWidth}x{gridHeight}");
+        Console.WriteLine($"Brush: {brushSize}");
+        Console.WriteLine($"Paused: {(paused ? "Yes" : "No")}");
+        Console.WriteLine(); // пустая строка-разделитель
+    }
+
+
+
+    static long AddSteps(long count = 1)
+    {
+        stepCounter += count;
+        stepCounterSpeed += count;
+        return stepCounter;
+    }
+    static void FillRandomShapes()
+    {
+        // очистим поле
+        //GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
+        //byte[] empty = new byte[gridWidth * gridHeight];
+        //GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, gridWidth, gridHeight,
+        //                 PixelFormat.Red, PixelType.UnsignedByte, empty);
+
+        Random rnd = new Random();
+
+        int shapeCount = rnd.Next(10, 30); // количество фигур
+        for (int i = 0; i < shapeCount; i++)
+        {
+            int w = rnd.Next(5, gridWidth/shapeCount);  // ширина фигуры
+            int h = rnd.Next(5, gridHeight/shapeCount + (gridHeight/2 - rnd.Next(0, gridHeight/2)));  // высота фигуры
+            int cx = rnd.Next(0, gridWidth - w);
+            int cy = rnd.Next(0, gridHeight - h);
+
+            // выбираем тип фигуры: 0 = прямоугольник, 1 = круг
+            int type = rnd.Next(2);
+
+            for (int x = 0; x < w; x++)
+            {
+                for (int y = 0; y < h; y++)
+                {
+                    int px = cx + x;
+                    int py = cy + y;
+
+                    bool inside = true;
+                    if (type == 1) // круг
+                    {
+                        float dx = x - w / 2f;
+                        float dy = y - h / 2f;
+                        inside = (dx * dx + dy * dy <= (Math.Min(w, h) / 2f) * (Math.Min(w, h) / 2f));
+                    }
+
+                    if (inside && px >= 0 && py >= 0 && px < gridWidth && py < gridHeight)
+                    {
+                        byte val = 255;
+                        GL.TexSubImage2D(TextureTarget.Texture2D, 0, px, py, 1, 1,
+                                         PixelFormat.Red, PixelType.UnsignedByte, new byte[] { val });
+                    }
+                }
+            }
+        }
+
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+        Console.WriteLine($"Random shapes placed: {shapeCount}");
+    }
+
 
     static void HandleDrawing(GameWindow window, Vector2 mousePos)
     {
@@ -328,7 +446,8 @@ partial class Program
         gridWidth = newW;
         gridHeight = newH;
 
-        Console.WriteLine($"Resized field: {gridWidth}x{gridHeight}");
+        PrintInfo();
+        //Console.WriteLine($"Resized field: {gridWidth}x{gridHeight}");
     }
 
 
@@ -354,9 +473,10 @@ partial class Program
         GL.BindVertexArray(quadVAO);
         GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
 
-        stepCounter++;
-        if (stepCounter % 10 == 0) // каждые 10 шагов, чтобы не спамить
-            Console.WriteLine($"Step {stepCounter}");
+        AddSteps();
+
+        //if (stepCounter % 10 == 0) // каждые 10 шагов, чтобы не спамить
+        //    Console.WriteLine($"Step {stepCounter}");
 
         // swap Front <-> Back
         (stateTextureFront, stateTextureBack) = (stateTextureBack, stateTextureFront);
@@ -399,8 +519,9 @@ partial class Program
         GL.BindTexture(TextureTarget.Texture2D, tex);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
+
         GL.BindTexture(TextureTarget.Texture2D, 0);
     }
 
