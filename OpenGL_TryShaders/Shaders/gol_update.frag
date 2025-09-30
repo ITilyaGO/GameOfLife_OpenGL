@@ -1,10 +1,13 @@
-#version 330 core
+﻿#version 330 core
 out vec4 FragColor;
 
 in vec2 vUV;
 
 uniform sampler2D currentState;
-uniform vec2 texelSize;  
+uniform vec2 texelSize;
+
+uniform int birthRules[9];
+uniform int survivalRules[9];
 
 float alive(vec2 uv)
 {
@@ -25,15 +28,15 @@ void main()
     }
 
     float cell = alive(vUV);
-    float nextState = cell;
+    float nextState = 0.0;
 
     if (cell > 0.5)
     {
-        nextState = (count == 2 || count == 3) ? 1.0 : 0.0;
+        if (survivalRules[count] == 1) nextState = 1.0;
     }
     else
     {
-        nextState = (count == 3) ? 1.0 : 0.0;
+        if (birthRules[count] == 1) nextState = 1.0;
     }
 
     FragColor = vec4(nextState, nextState, nextState, 1.0);

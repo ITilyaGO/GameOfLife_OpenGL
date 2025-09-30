@@ -31,10 +31,10 @@ partial class Program
     static int brushSize = 1; // радиус кисти (1 => 3x3)
     static double timeSincePrint = 0;
 
-    const double maxFps = 240;
-    long frameCounter = 0;
+    static int[] birth = new int[9];
+    static int[] survival = new int[9];
 
-    static DateTime lastInfoTime = DateTime.Now;
+    static int locBirth, locSurvival;
     static void Main()
     {
         var settings = new NativeWindowSettings
@@ -47,6 +47,17 @@ partial class Program
 
         window.Load += () =>
         {
+
+            Array.Clear(birth, 0, 9);
+            Array.Clear(survival, 0, 9);
+
+            birth[3] = 1;          // B3
+            survival[2] = 1;       // S23
+            survival[3] = 1;
+
+            locBirth = GL.GetUniformLocation(updateShaderProgram, "birthRules");
+            locSurvival = GL.GetUniformLocation(updateShaderProgram, "survivalRules");
+
             // ---------- Fullscreen quad ----------
             float[] quad =
             {
@@ -59,6 +70,7 @@ partial class Program
                  1f,  1f,     1f, 1f,
                 -1f,  1f,     0f, 1f
             };
+
             quadVAO = GL.GenVertexArray();
             quadVBO = GL.GenBuffer();
             GL.BindVertexArray(quadVAO);
@@ -116,7 +128,7 @@ partial class Program
 
             if (kb.IsKeyPressed(Keys.Up))
             {
-                stepInterval = Math.Max(0.001, stepInterval * 0.8); // быстрее (уменьшаем интервал)
+                stepInterval = Math.Max(0.0005, stepInterval * 0.8); // быстрее (уменьшаем интервал)
                 window.Title = $"Game of Life — speed: {1.0 / stepInterval:F1} steps/sec";
             }
 
@@ -136,8 +148,8 @@ partial class Program
 
             if (kb.IsKeyPressed(Keys.Minus) || kb.IsKeyPressed(Keys.KeyPadSubtract))
             {
-                int newW = Math.Min(2048, gridWidth * 2);
-                int newH = Math.Min(2048, gridHeight * 2);
+                int newW = Math.Min(2048*2, gridWidth * 2);
+                int newH = Math.Min(2048*2, gridHeight * 2);
                 ResizeGameField(newW, newH);
             }
 
@@ -164,6 +176,17 @@ partial class Program
                 FillRandomShapes();
             }
 
+            if (kb.IsKeyPressed(Keys.F1))
+                SetRules(new int[] { 3 }, new int[] { 2, 3 });          // Conway B3/S23
+
+            if (kb.IsKeyPressed(Keys.F2))
+                SetRules(new int[] { 3, 6 }, new int[] { 2, 3 });       // HighLife B36/S23
+
+            if (kb.IsKeyPressed(Keys.F3))
+                SetRules(new int[] { 2 }, new int[] { });               // Seeds B2/S
+
+            if (kb.IsKeyPressed(Keys.F4))
+                SetRules(new int[] { 3, 6, 7, 8 }, new int[] { 3, 4, 6, 7, 8 }); // Day&Night
 
         };
 
@@ -227,6 +250,25 @@ partial class Program
     //    Console.Write($"Step: {steps} | Speed: {stepsPerSec:F1} steps/sec    ");
     //    Console.SetCursorPosition(0, top); // вернём курсор назад
     //}
+    static void SetRules(int[] birthNums, int[] survivalNums)
+    {
+        Array.Clear(birth, 0, 9);
+        Array.Clear(survival, 0, 9);
+
+        // отметить рождения
+        foreach (int n in birthNums)
+            if (n >= 0 && n <= 8) birth[n] = 1;
+
+        // отметить выживания
+        foreach (int n in survivalNums)
+            if (n >= 0 && n <= 8) survival[n] = 1;
+
+        GL.UseProgram(updateShaderProgram);
+        GL.Uniform1(locBirth, 9, birth);
+        GL.Uniform1(locSurvival, 9, survival);
+
+        Console.WriteLine($"Rules set: B{string.Join("", birthNums)} / S{string.Join("", survivalNums)}");
+    }
 
     static void PrintInfo()
     {
@@ -464,6 +506,13 @@ partial class Program
         GL.UseProgram(updateShaderProgram);
         int locState = GL.GetUniformLocation(updateShaderProgram, "currentState");
         int locTexel = GL.GetUniformLocation(updateShaderProgram, "texelSize");
+
+        int locBirth = GL.GetUniformLocation(updateShaderProgram, "birthRules");
+        int locSurvival = GL.GetUniformLocation(updateShaderProgram, "survivalRules");
+
+        GL.Uniform1(locBirth, 9, birth);
+        GL.Uniform1(locSurvival, 9, survival);
+
 
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
