@@ -12,5 +12,5 @@ void main()
     int type = int(cell.g * 255.0 + 0.5);
 
     vec4 color = texelFetch(typeColors, ivec2(type, 0), 0);
-    FragColor = mix(vec4(0.0, 0.0, 0.0, 1.0), color, alive);
+    FragColor = mix(vec4(0.4, 0.4, 0.4, 1.0), color, alive);
 }

@@ -88,13 +88,13 @@ partial class Program
             // --- Rules ---
             InitRuleTexture();
             SetRule(0, [3], [2, 3]);       // Conway (классика)
-            //SetRule(1, [3, 4], [2, 3]);    // HighLife (вариант Conway, рождается и при 6)
+            SetRule(1, [3], [2, 4]);    // HighLife (вариант Conway, рождается и при 6)
             UploadRules();
 
             // --- Colors ---
             InitTypeColorTexture();
             SetTypeColor(0, 255, 255, 255); // Conway = белый
-            //SetTypeColor(1, 255, 255, 0);   // HighLife = жёлтый
+            SetTypeColor(1, 255, 255, 0);   // HighLife = жёлтый
             UploadTypeColors();
 
             // --- Interactions ---
@@ -104,7 +104,7 @@ partial class Program
             //SetInteraction(0, 1, 0.5f);
 
             // HighLife видит Conway и сам себя
-            //SetInteraction(1, 1, 1.0f);
+            SetInteraction(1, 1, 1.0f);
             //SetInteraction(1, 1, 1.0f);
 
             UploadInteractions();
@@ -160,10 +160,10 @@ partial class Program
                 DoSimulationStep();
 
             if (kb.IsKeyPressed(Keys.LeftBracket))  // [
-                brushSize = Math.Max(1, brushSize - 1);
-
+                brushSize = Math.Max(0, brushSize - 1);
             if (kb.IsKeyPressed(Keys.RightBracket)) // ]
-                brushSize = Math.Min(100, brushSize + 1);
+                brushSize = Math.Min(1000, brushSize + 1);
+
 
             if (kb.IsKeyPressed(Keys.Equal) || kb.IsKeyPressed(Keys.KeyPadAdd))
             {
@@ -283,6 +283,7 @@ partial class Program
         GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
 
         int shapeCount = rnd.Next(10, 30);
+        shapeCount = 1;
         for (int i = 0; i < shapeCount; i++)
         {
             int w = rnd.Next(5, gridWidth / 4);
@@ -293,8 +294,8 @@ partial class Program
             bool circle = rnd.Next(2) == 0;
 
             // случайный тип клетки: 0..2
-            byte type = (byte)rnd.Next(3);
-
+            byte type = (byte)rnd.Next(1,2);
+            
             for (int x = 0; x < w; x++)
                 for (int y = 0; y < h; y++)
                 {
