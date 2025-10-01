@@ -88,7 +88,7 @@ partial class Program
             // --- Rules ---
             InitRuleTexture();
             SetRule(0, [3], [2, 3]);       // Conway (классика)
-            SetRule(1, [3], [2, 4]);    // HighLife (вариант Conway, рождается и при 6)
+            SetRule(1, [3], [2,3, 4]);    // HighLife (вариант Conway, рождается и при 6)
             UploadRules();
 
             // --- Colors ---
