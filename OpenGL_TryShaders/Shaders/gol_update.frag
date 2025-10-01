@@ -1,36 +1,45 @@
 ﻿#version 330 core
 out vec4 FragColor;
-
 in vec2 vUV;
 
-uniform sampler2D currentState; 
-uniform sampler2D ruleTex;  
+uniform sampler2D currentState;
+uniform sampler2D ruleTex;
+uniform sampler2D interactionTex;
 uniform vec2 texelSize;
-
-vec4 cell(vec2 uv) { return texture(currentState, uv); }
 
 void main()
 {
-    vec4 self = cell(vUV);
+    vec4 cell = texture(currentState, vUV);
+    float alive = cell.r;
+    int type = int(cell.g * 255.0 + 0.5);
 
-    int count = 0;
-    for (int x = -1; x <= 1; x++)
-    for (int y = -1; y <= 1; y++)
+    float fcount = 0.0;
+
+    for (int dx = -1; dx <= 1; dx++)
+    for (int dy = -1; dy <= 1; dy++)
     {
-        if (x == 0 && y == 0) continue;
-        vec4 n = cell(vUV + vec2(x, y) * texelSize);
-        if (n.r > 0.5) count++;
+        if (dx == 0 && dy == 0) continue;
+        vec2 offset = vec2(dx, dy) * texelSize;
+
+        vec2 uv = fract(vUV + offset);
+        vec4 neigh = texture(currentState, uv);
+
+        if (neigh.r > 0.5)
+        {
+            int nType = int(neigh.g * 255.0 + 0.5);
+            float weight = texelFetch(interactionTex, ivec2(nType, type), 0).r;
+            fcount += weight;
+        }
     }
 
-    int type = int(self.g * 255.0 + 0.5);
 
-    vec2 rule = texelFetch(ruleTex, ivec2(count, type), 0).rg;
+    int n = int(round(fcount));
+    n = clamp(n, 0, 8);
 
-    float aliveNow  = self.r > 0.5 ? 1.0 : 0.0;
-    float nextAlive = 0.0;
+    vec2 rule = texelFetch(ruleTex, ivec2(n, type), 0).rg;
+    float born = rule.r;
+    float survive = rule.g;
 
-    if (aliveNow > 0.5)  nextAlive = (rule.g > 0.5) ? 1.0 : 0.0;
-    else                 nextAlive = (rule.r > 0.5) ? 1.0 : 0.0; 
-
-    FragColor = vec4(nextAlive, self.g, self.b, 1.0);
+    float nextAlive = alive > 0.5 ? survive : born;
+    FragColor = vec4(nextAlive, cell.g, 0.0, 1.0);
 }

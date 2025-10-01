@@ -7,15 +7,10 @@ uniform sampler2D typeColors;
 
 void main()
 {
-    vec4 c = texture(currentState, vUV);
+    vec4 cell = texture(currentState, vUV);
+    float alive = cell.r;
+    int type = int(cell.g * 255.0 + 0.5);
 
-    if (c.r < 0.5)
-    {
-        FragColor = vec4(0.0, 0.0, 0.0, 1.0); 
-    }
-    else
-    {
-        int type = int(c.g * 255.0 + 0.5);
-        FragColor = texelFetch(typeColors, ivec2(type, 0), 0);
-    }
+    vec4 color = texelFetch(typeColors, ivec2(type, 0), 0);
+    FragColor = mix(vec4(0.0, 0.0, 0.0, 1.0), color, alive);
 }

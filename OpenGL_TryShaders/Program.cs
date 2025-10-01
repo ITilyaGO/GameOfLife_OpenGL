@@ -8,80 +8,59 @@ using System.Reflection;
 
 partial class Program
 {
-    // --- размеры поля
     static int gridWidth = 256;
     static int gridHeight = 256;
 
-    // --- GL объекты
-    static int quadVAO = 0, quadVBO = 0;
-    static int updateShaderProgram = 0, blitShaderProgram = 0;
-    static int stateTextureFront = 0, stateTextureBack = 0; // ping-pong
-    static int framebuffer = 0;
+    static int quadVAO, quadVBO;
+    static int updateShaderProgram, blitShaderProgram;
+    static int stateTextureFront, stateTextureBack;
+    static int framebuffer;
 
-    // --- управление
     static bool paused = false;
-    static double stepInterval = 0.1;   // шаг каждые 0.1с = ~10 шаг/сек
+    static double stepInterval = 0.1;
     static double timeAccumulator = 0.0;
 
-    static long stepCounter { get; set; }
+    static long stepCounter;
     static long stepCounterSpeed = 0;
     static double lastPrintTime = 0;
     static double lastSpeed = 0;
-    static Vector2? lastMousePos = null;
-    static int brushSize = 1; // радиус кисти (1 => 3x3)
     static double timeSincePrint = 0;
+    static Vector2? lastMousePos = null;
+    static int brushSize = 1;
 
-    static int[] birth = new int[9];
-    static int[] survival = new int[9];
-
-    const int MaxTypes = 16;          // сколько типов поддерживаем
-    static int ruleTex = 0;           // текстура правил B/S
-    static byte[] ruleData = new byte[MaxTypes * 9 * 2]; // 9 соседей × 2 канала (R=B, G=S) на тип
-
-    // (если ещё нет)
-    static int typeColorTex = 0;      // LUT цветов типов (16×1 RGBA8)
+    const int MaxTypes = 16;
+    static int ruleTex;
+    static byte[] ruleData = new byte[MaxTypes * 9 * 2];
+    static int interactionTex;
+    static byte[] interactionData = new byte[MaxTypes * MaxTypes];
+    static int typeColorTex;
     static byte[] typeColors = new byte[MaxTypes * 4];
 
-    static int currentBrushType = 0;  // какой тип рисуем (0..MaxTypes-1)
+    static int currentBrushType = 0;
 
-    static int locBirth, locSurvival;
-    internal static readonly int[] int32Array = new int[] { 3 };
-
-    byte[] pxAliveType(byte alive, byte type) => new byte[] { alive, type, 0, 255 };
+    static int usedTypes = 0;
 
     static void Main()
     {
         var settings = new NativeWindowSettings
         {
             ClientSize = new Vector2i(900, 900),
-            Title = "Game of Life (OpenTK + GLSL, ping-pong)"
+            Title = "Game of Life (OpenTK + GLSL)"
         };
 
         using var window = new GameWindow(GameWindowSettings.Default, settings);
 
         window.Load += () =>
         {
-            Array.Clear(birth, 0, 9);
-            Array.Clear(survival, 0, 9);
-
-            birth[3] = 1;          // B3
-            survival[2] = 1;       // S23
-            survival[3] = 1;
-
-            locBirth = GL.GetUniformLocation(updateShaderProgram, "birthRules");
-            locSurvival = GL.GetUniformLocation(updateShaderProgram, "survivalRules");
-
-            // ---------- Fullscreen quad ----------
+            // --- Quad ---
             float[] quad =
             {
-                //   pos        uv
-                -1f, -1f,     0f, 0f,
-                 1f, -1f,     1f, 0f,
-                 1f,  1f,     1f, 1f,
-
-                -1f, -1f,     0f, 0f,
-                 1f,  1f,     1f, 1f,
-                -1f,  1f,     0f, 1f
+                -1f, -1f, 0f, 0f,
+                 1f, -1f, 1f, 0f,
+                 1f,  1f, 1f, 1f,
+                -1f, -1f, 0f, 0f,
+                 1f,  1f, 1f, 1f,
+                -1f,  1f, 0f, 1f
             };
 
             quadVAO = GL.GenVertexArray();
@@ -94,25 +73,10 @@ partial class Program
             GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 4 * sizeof(float), 2 * sizeof(float));
             GL.EnableVertexAttribArray(1);
 
-            // ---------- Shaders ----------
+            // --- Shaders ---
             int vs = CompileShader(LoadEmbedded("Shaders.fullscreen.vert"), ShaderType.VertexShader);
             int fsUpdate = CompileShader(LoadEmbedded("Shaders.gol_update.frag"), ShaderType.FragmentShader);
             int fsBlit = CompileShader(LoadEmbedded("Shaders.blit.frag"), ShaderType.FragmentShader);
-
-            // --- правила ---
-            InitRuleTexture();
-            SetRule(0, int32Array, [2, 3]); // Conway B3/S23
-            UploadRules();
-
-            // --- цвета ---
-            InitTypeColorTexture();
-            SetTypeColor(0, 255, 255, 255); // Conway белый
-            UploadTypeColors();
-
-            // текущая кисть всегда Conway
-            currentBrushType = 0;
-
-
 
             updateShaderProgram = LinkProgram(vs, fsUpdate);
             blitShaderProgram = LinkProgram(vs, fsBlit);
@@ -121,51 +85,85 @@ partial class Program
             GL.DeleteShader(fsUpdate);
             GL.DeleteShader(fsBlit);
 
-            // ---------- Textures ----------
+            // --- Rules ---
+            InitRuleTexture();
+            SetRule(0, [3], [2, 3]);       // Conway (классика)
+            //SetRule(1, [3, 4], [2, 3]);    // HighLife (вариант Conway, рождается и при 6)
+            UploadRules();
+
+            // --- Colors ---
+            InitTypeColorTexture();
+            SetTypeColor(0, 255, 255, 255); // Conway = белый
+            //SetTypeColor(1, 255, 255, 0);   // HighLife = жёлтый
+            UploadTypeColors();
+
+            // --- Interactions ---
+            InitInteractionTexture();
+            // Conway видит себя и чуть-чуть HighLife
+            SetInteraction(0, 0, 1.0f);
+            //SetInteraction(0, 1, 0.5f);
+
+            // HighLife видит Conway и сам себя
+            //SetInteraction(1, 1, 1.0f);
+            //SetInteraction(1, 1, 1.0f);
+
+            UploadInteractions();
+
+
+
+            currentBrushType = 0;
+
+            // --- Bind samplers ---
+            GL.UseProgram(updateShaderProgram);
+            GL.Uniform1(GL.GetUniformLocation(updateShaderProgram, "currentState"), 0);
+            GL.Uniform1(GL.GetUniformLocation(updateShaderProgram, "ruleTex"), 1);
+            GL.Uniform1(GL.GetUniformLocation(updateShaderProgram, "interactionTex"), 2);
+
+            GL.UseProgram(blitShaderProgram);
+            GL.Uniform1(GL.GetUniformLocation(blitShaderProgram, "currentState"), 0);
+            GL.Uniform1(GL.GetUniformLocation(blitShaderProgram, "typeColors"), 1);
+
+            // --- Textures ---
             ResetGameField(randomInit: true);
 
-            // ---------- FBO (после создания текстур!) ----------
             framebuffer = GL.GenFramebuffer();
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, framebuffer);
             GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
-                                    TextureTarget.Texture2D, stateTextureBack, 0);
-            var status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-            if (status != FramebufferErrorCode.FramebufferComplete)
-                throw new Exception("FBO incomplete: " + status);
+                TextureTarget.Texture2D, stateTextureBack, 0);
+            if (GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != FramebufferErrorCode.FramebufferComplete)
+                throw new Exception("FBO incomplete");
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 
-            // viewport под окно
             GL.Viewport(0, 0, window.ClientSize.X, window.ClientSize.Y);
         };
 
-        // ----- клавиатура: очистка/пауза/скорость
         window.UpdateFrame += args =>
         {
             var kb = window.KeyboardState;
 
             if (kb.IsKeyPressed(Keys.C))
-            {
-                ResetGameField(false); // полная очистка (всё нули)
-            }
+                ResetGameField(false);
+
             if (kb.IsKeyPressed(Keys.Space))
             {
-                timeAccumulator = 0.0; // ⚡ сбрасываем, чтобы не "догоняло"
+                timeAccumulator = 0.0;
                 paused = !paused;
             }
 
-
             if (kb.IsKeyPressed(Keys.Up))
-            {
-                stepInterval = Math.Max(0.0005, stepInterval * 0.8); // быстрее (уменьшаем интервал)
-                window.Title = $"Game of Life — speed: {1.0 / stepInterval:F1} steps/sec";
-            }
+                stepInterval = Math.Max(0.0005, stepInterval * 0.8); // быстрее
 
             if (kb.IsKeyPressed(Keys.Down))
-            {
-                stepInterval = Math.Min(10.0, stepInterval * 1.25); // медленнее (увеличиваем интервал)
-                window.Title = $"Game of Life — speed: {1.0 / stepInterval:F1} steps/sec";
-            }
+                stepInterval = Math.Min(10.0, stepInterval * 1.25);  // медленнее
 
+            if (kb.IsKeyPressed(Keys.Enter))
+                DoSimulationStep();
+
+            if (kb.IsKeyPressed(Keys.LeftBracket))  // [
+                brushSize = Math.Max(1, brushSize - 1);
+
+            if (kb.IsKeyPressed(Keys.RightBracket)) // ]
+                brushSize = Math.Min(100, brushSize + 1);
 
             if (kb.IsKeyPressed(Keys.Equal) || kb.IsKeyPressed(Keys.KeyPadAdd))
             {
@@ -176,135 +174,176 @@ partial class Program
 
             if (kb.IsKeyPressed(Keys.Minus) || kb.IsKeyPressed(Keys.KeyPadSubtract))
             {
-                int newW = Math.Min(2048*2, gridWidth * 2);
-                int newH = Math.Min(2048*2, gridHeight * 2);
+                int newW = Math.Min(4096, gridWidth * 2);
+                int newH = Math.Min(4096, gridHeight * 2);
                 ResizeGameField(newW, newH);
             }
 
-            if (kb.IsKeyPressed(Keys.Enter))
-            {
-                DoSimulationStep();
-                Console.WriteLine($"Manual step {AddSteps()}");
-            }
-
-            if (kb.IsKeyPressed(Keys.LeftBracket)) // [
-            {
-                brushSize = Math.Max(0, brushSize - 1);
-                Console.WriteLine($"Brush size: {brushSize}");
-            }
-
-            if (kb.IsKeyPressed(Keys.RightBracket)) // ]
-            {
-                brushSize = Math.Min(100, brushSize + 1);
-                Console.WriteLine($"Brush size: {brushSize}");
-            }
-
             if (kb.IsKeyPressed(Keys.R))
-            {
                 FillRandomShapes();
+
+            // выбор типа кисти цифрами 1..N
+            for (int i = 0; i < usedTypes; i++)
+            {
+                var key = Keys.D1 + i; // Keys.D1 .. Keys.D9
+                if (kb.IsKeyPressed(key))
+                {
+                    currentBrushType = i;
+                    Console.WriteLine($"Brush type set to {i}");
+                }
             }
-
-            if (kb.IsKeyPressed(Keys.F1))
-                SetRules(new int[] { 3 }, new int[] { 2, 3 });          // Conway B3/S23
-
-            if (kb.IsKeyPressed(Keys.F2))
-                SetRules(new int[] { 3, 6 }, new int[] { 2, 3 });       // HighLife B36/S23
-
-            if (kb.IsKeyPressed(Keys.F3))
-                SetRules(new int[] { 2 }, new int[] { });               // Seeds B2/S
-
-            if (kb.IsKeyPressed(Keys.F4))
-                SetRules(new int[] { 3, 6, 7, 8 }, new int[] { 3, 4, 6, 7, 8 }); // Day&Night
-
-        };
-
-        // ----- мышь: рисование (ЛКМ — поставить, ПКМ — стереть)
-        window.MouseDown += args =>
-        {
-            HandleDrawing(window, window.MouseState.Position);
-        };
-
-        window.MouseMove += args =>
-        {
-            HandleDrawing(window, window.MouseState.Position);
         };
 
 
-        // ----- рендер + апдейт (fixed timestep + ping-pong)
+        window.MouseDown += args => HandleDrawing(window, window.MouseState.Position);
+        window.MouseMove += args => HandleDrawing(window, window.MouseState.Position);
+
         window.RenderFrame += args =>
         {
             timeAccumulator += args.Time;
-
             if (!paused)
             {
                 while (timeAccumulator >= stepInterval)
                 {
-                    DoSimulationStep(); // один шаг "Жизни"
+                    DoSimulationStep();
                     timeAccumulator -= stepInterval;
                 }
             }
 
             timeSincePrint += args.Time;
-            if (timeSincePrint >= 0.2) // раз в секунду
+            if (timeSincePrint >= 0.2)
             {
                 PrintInfo();
                 timeSincePrint = 0;
             }
 
-
             BlitToScreen(window);
-
-            window.SwapBuffers(); // важно!
+            window.SwapBuffers();
         };
 
         window.Run();
+    }
+    static void ResizeGameField(int newW, int newH)
+    {
+        // создаём новые пустые текстуры (RGBA8)
+        int newFront = CreateStateTexture(newW, newH, false);
+        int newBack = CreateStateTexture(newW, newH, false);
 
-        // ---- cleanup (опционально)
-        GL.DeleteVertexArray(quadVAO);
-        GL.DeleteBuffer(quadVBO);
-        GL.DeleteTexture(stateTextureFront);
-        GL.DeleteTexture(stateTextureBack);
-        GL.DeleteProgram(updateShaderProgram);
-        GL.DeleteProgram(blitShaderProgram);
-        GL.DeleteFramebuffer(framebuffer);
+        ApplyTextureParams(newFront);
+        ApplyTextureParams(newBack);
+
+        if (stateTextureFront != 0)
+        {
+            // читаем всю старую текстуру (RGBA)
+            byte[] oldData = new byte[gridWidth * gridHeight * 4];
+            GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
+            GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
+            GL.GetTexImage(TextureTarget.Texture2D, 0,
+                           PixelFormat.Rgba, PixelType.UnsignedByte, oldData);
+
+            int copyW = Math.Min(gridWidth, newW);
+            int copyH = Math.Min(gridHeight, newH);
+
+            // создаём буфер для нового блока
+            byte[] copyData = new byte[copyW * copyH * 4];
+            for (int y = 0; y < copyH; y++)
+            {
+                Array.Copy(
+                    oldData, y * gridWidth * 4,
+                    copyData, y * copyW * 4,
+                    copyW * 4
+                );
+            }
+
+            // вставляем в центр новой текстуры
+            GL.BindTexture(TextureTarget.Texture2D, newFront);
+            GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+            GL.TexSubImage2D(TextureTarget.Texture2D, 0,
+                             (newW - copyW) / 2, (newH - copyH) / 2,
+                             copyW, copyH,
+                             PixelFormat.Rgba, PixelType.UnsignedByte, copyData);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        if (stateTextureFront != 0) GL.DeleteTexture(stateTextureFront);
+        if (stateTextureBack != 0) GL.DeleteTexture(stateTextureBack);
+
+        stateTextureFront = newFront;
+        stateTextureBack = newBack;
+        gridWidth = newW;
+        gridHeight = newH;
+
+        PrintInfo();
     }
 
 
-    // ===== helpers =====
+    static void FillRandomShapes()
+    {
+        var rnd = new Random();
+        GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
 
-    //static void PrintStep(long steps, double stepsPerSec)
-    //{
-    //    int top = Console.CursorTop;   // запомним текущую строку
-    //    Console.SetCursorPosition(0, 0);
-    //    Console.Write($"Step: {steps} | Speed: {stepsPerSec:F1} steps/sec    ");
-    //    Console.SetCursorPosition(0, top); // вернём курсор назад
-    //}
+        int shapeCount = rnd.Next(10, 30);
+        for (int i = 0; i < shapeCount; i++)
+        {
+            int w = rnd.Next(5, gridWidth / 4);
+            int h = rnd.Next(5, gridHeight / 4);
+            int cx = rnd.Next(0, gridWidth - w);
+            int cy = rnd.Next(0, gridHeight - h);
 
+            bool circle = rnd.Next(2) == 0;
+
+            // случайный тип клетки: 0..2
+            byte type = (byte)rnd.Next(3);
+
+            for (int x = 0; x < w; x++)
+                for (int y = 0; y < h; y++)
+                {
+                    int px = cx + x, py = cy + y;
+                    if (px < 0 || py < 0 || px >= gridWidth || py >= gridHeight) continue;
+
+                    bool inside = true;
+                    if (circle)
+                    {
+                        float dx = x - w / 2f, dy = y - h / 2f;
+                        inside = dx * dx + dy * dy <= (Math.Min(w, h) / 2f) * (Math.Min(w, h) / 2f);
+                    }
+
+                    if (inside)
+                    {
+                        byte[] rgba = { 255, type, 0, 255 }; // alive=255, type=G, A=255
+                        GL.TexSubImage2D(TextureTarget.Texture2D, 0, px, py, 1, 1,
+                                         PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
+                    }
+                }
+        }
+
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+        Console.WriteLine($"Random shapes placed: {shapeCount}");
+    }
+
+
+    // === RULES ===
     static void InitRuleTexture()
     {
         ruleTex = GL.GenTexture();
         GL.BindTexture(TextureTarget.Texture2D, ruleTex);
-
-        // Текстура 9×MaxTypes, формат RG8 (R = Birth, G = Survival)
         GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rg8,
-                      9, MaxTypes, 0, PixelFormat.Rg, PixelType.UnsignedByte, IntPtr.Zero);
-
+            9, MaxTypes, 0, PixelFormat.Rg, PixelType.UnsignedByte, IntPtr.Zero);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
     }
 
     static void SetRule(int type, int[] birth, int[] survival)
     {
-        // type — индекс строки в LUT (0..MaxTypes-1)
         for (int n = 0; n < 9; n++)
         {
             bool b = Array.IndexOf(birth, n) >= 0;
             bool s = Array.IndexOf(survival, n) >= 0;
             int baseIdx = (type * 9 + n) * 2;
-            ruleData[baseIdx + 0] = (byte)(b ? 255 : 0); // R = Birth
-            ruleData[baseIdx + 1] = (byte)(s ? 255 : 0); // G = Survival
+            ruleData[baseIdx + 0] = (byte)(b ? 255 : 0);
+            ruleData[baseIdx + 1] = (byte)(s ? 255 : 0);
         }
     }
 
@@ -312,9 +351,19 @@ partial class Program
     {
         GL.BindTexture(TextureTarget.Texture2D, ruleTex);
         GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, 9, MaxTypes,
-                         PixelFormat.Rg, PixelType.UnsignedByte, ruleData);
+            PixelFormat.Rg, PixelType.UnsignedByte, ruleData);
     }
 
+    // === COLORS ===
+    static void InitTypeColorTexture()
+    {
+        typeColorTex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, typeColorTex);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
+            MaxTypes, 1, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+    }
 
     static void SetTypeColor(int type, byte r, byte g, byte b)
     {
@@ -323,171 +372,164 @@ partial class Program
         typeColors[i + 1] = g;
         typeColors[i + 2] = b;
         typeColors[i + 3] = 255; // alpha
+
+        if (type + 1 > usedTypes)
+            usedTypes = type + 1; // обновляем максимум
     }
 
     static void UploadTypeColors()
     {
         GL.BindTexture(TextureTarget.Texture2D, typeColorTex);
         GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, MaxTypes, 1,
-                         PixelFormat.Rgba, PixelType.UnsignedByte, typeColors);
+            PixelFormat.Rgba, PixelType.UnsignedByte, typeColors);
     }
 
-    static void InitTypeColorTexture()
+    // === INTERACTIONS ===
+    static void InitInteractionTexture()
     {
-        typeColorTex = GL.GenTexture();
+        interactionTex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, interactionTex);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R8,
+            MaxTypes, MaxTypes, 0, PixelFormat.Red, PixelType.UnsignedByte, IntPtr.Zero);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+    }
+
+    static void SetInteraction(int myType, int neighType, float weight01)
+    {
+        int index = myType * MaxTypes + neighType;
+        interactionData[index] = (byte)(Math.Clamp(weight01, 0f, 1f) * 255);
+    }
+
+    static void UploadInteractions()
+    {
+        GL.BindTexture(TextureTarget.Texture2D, interactionTex);
+        GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, MaxTypes, MaxTypes,
+            PixelFormat.Red, PixelType.UnsignedByte, interactionData);
+    }
+
+    // === SIMULATION ===
+    static void DoSimulationStep()
+    {
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, framebuffer);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, stateTextureBack, 0);
+
+        GL.Viewport(0, 0, gridWidth, gridHeight);
+
+        GL.UseProgram(updateShaderProgram);
+
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
+
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, ruleTex);
+
+        GL.ActiveTexture(TextureUnit.Texture2);
+        GL.BindTexture(TextureTarget.Texture2D, interactionTex);
+
+        int locTexel = GL.GetUniformLocation(updateShaderProgram, "texelSize");
+        GL.Uniform2(locTexel, 1.0f / gridWidth, 1.0f / gridHeight);
+
+        GL.BindVertexArray(quadVAO);
+        GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
+
+        stepCounter++;
+
+        (stateTextureFront, stateTextureBack) = (stateTextureBack, stateTextureFront);
+
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
+    static void BlitToScreen(GameWindow window)
+    {
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        GL.Viewport(0, 0, window.ClientSize.X, window.ClientSize.Y);
+
+        GL.ClearColor(0.05f, 0.05f, 0.07f, 1.0f);
+        GL.Clear(ClearBufferMask.ColorBufferBit);
+
+        GL.UseProgram(blitShaderProgram);
+
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
+
+        GL.ActiveTexture(TextureUnit.Texture1);
         GL.BindTexture(TextureTarget.Texture2D, typeColorTex);
 
-        // создаём текстуру 16x1 RGBA8
-        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
-                      MaxTypes, 1, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+        GL.BindVertexArray(quadVAO);
+        GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
+    }
 
+    // === TEXTURES ===
+    static void ResetGameField(bool randomInit)
+    {
+        if (stateTextureFront != 0) GL.DeleteTexture(stateTextureFront);
+        if (stateTextureBack != 0) GL.DeleteTexture(stateTextureBack);
+
+        stateTextureFront = CreateStateTexture(gridWidth, gridHeight, randomInit);
+        stateTextureBack = CreateStateTexture(gridWidth, gridHeight, false);
+
+        ApplyTextureParams(stateTextureFront);
+        ApplyTextureParams(stateTextureBack);
+    }
+
+    static int CreateStateTexture(int w, int h, bool randomInit)
+    {
+        int tex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, tex);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, w, h, 0,
+            PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+
+        byte[] data = new byte[w * h * 4];
+        if (randomInit)
+        {
+            var rnd = new Random();
+            for (int i = 0; i < w * h; i++)
+            {
+                bool alive = rnd.Next(2) == 0;
+                byte type = (byte)rnd.Next(Math.Max(1, usedTypes)); // если не задали — хотя бы 1
+                data[i * 4 + 0] = (byte)(alive ? 255 : 0);
+                data[i * 4 + 1] = type;
+                data[i * 4 + 2] = 0;
+                data[i * 4 + 3] = 255;
+            }
+        }
+
+        GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, w, h,
+            PixelFormat.Rgba, PixelType.UnsignedByte, data);
+
+        return tex;
+    }
+
+
+    static void ApplyTextureParams(int tex)
+    {
+        GL.BindTexture(TextureTarget.Texture2D, tex);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
     }
 
-
-    static void SetRules(int[] birthNums, int[] survivalNums)
-    {
-        Array.Clear(birth, 0, 9);
-        Array.Clear(survival, 0, 9);
-
-        // отметить рождения
-        foreach (int n in birthNums)
-            if (n >= 0 && n <= 8) birth[n] = 1;
-
-        // отметить выживания
-        foreach (int n in survivalNums)
-            if (n >= 0 && n <= 8) survival[n] = 1;
-
-        GL.UseProgram(updateShaderProgram);
-        GL.Uniform1(locBirth, 9, birth);
-        GL.Uniform1(locSurvival, 9, survival);
-
-        Console.WriteLine($"Rules set: B{string.Join("", birthNums)} / S{string.Join("", survivalNums)}");
-    }
-
-    static void PrintInfo()
-    {
-        double now = DateTime.Now.Ticks / (double)TimeSpan.TicksPerSecond;
-        double dt = now - lastPrintTime;
-
-        if (dt >= 0.2) // обновляем раз в 0.2 сек
-        {
-            lastSpeed = stepCounterSpeed / dt;
-            stepCounterSpeed = 0;
-            lastPrintTime = now;
-        }
-
-        // всегда пишем с первой строки
-        Console.SetCursorPosition(0, 0);
-
-        // очищаем блок (например, 6 строк, чтобы стереть старое)
-        for (int i = 0; i < 6; i++)
-        {
-            Console.WriteLine(new string(' ', Console.WindowWidth));
-        }
-        Console.SetCursorPosition(0, 0);
-
-        // печатаем блок инфы
-        Console.WriteLine($"Step: {stepCounter} | Speed: {lastSpeed:F1} steps/sec | Field: {gridWidth}x{gridHeight}");
-        Console.WriteLine($"Brush: {brushSize}");
-        Console.WriteLine($"Paused: {(paused ? "Yes" : "No")}");
-        Console.WriteLine(); // пустая строка-разделитель
-    }
-
-
-
-    static long AddSteps(long count = 1)
-    {
-        stepCounter += count;
-        stepCounterSpeed += count;
-        return stepCounter;
-    }
-    static void FillRandomShapes()
-    {
-        Random rnd = new Random();
-
-        // привязка текстуры перед записью
-        GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
-        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-
-        int shapeCount = rnd.Next(10, 30); // количество фигур
-        for (int i = 0; i < shapeCount; i++)
-        {
-            int w = rnd.Next(5, gridWidth / shapeCount); // ширина фигуры
-            int h = rnd.Next(5, gridHeight/shapeCount + (gridHeight/2 - rnd.Next(0, gridHeight/2))); // высота фигуры
-            int cx = rnd.Next(0, gridWidth - w);
-            int cy = rnd.Next(0, gridHeight - h);
-
-            // форма: 0 = прямоугольник, 1 = круг
-            int shapeType = rnd.Next(2);
-
-            // выбираем "правило-тип" для клеток фигуры
-            byte cellType = (byte)rnd.Next(0, 4); // например, от 0 до 3 (Conway, HighLife, Seeds, Day&Night)
-
-            for (int x = 0; x < w; x++)
-            {
-                for (int y = 0; y < h; y++)
-                {
-                    int px = cx + x;
-                    int py = cy + y;
-
-                    bool inside = true;
-                    if (shapeType == 1) // круг
-                    {
-                        float dx = x - w / 2f;
-                        float dy = y - h / 2f;
-                        inside = (dx * dx + dy * dy <= (Math.Min(w, h) / 2f) * (Math.Min(w, h) / 2f));
-                    }
-
-                    if (inside && px >= 0 && py >= 0 && px < gridWidth && py < gridHeight)
-                    {
-                        byte[] rgba = new byte[]
-                        {
-                        255,         // R = alive
-                        cellType,    // G = тип
-                        0,           // B (резерв)
-                        255          // A
-                        };
-
-                        GL.TexSubImage2D(TextureTarget.Texture2D, 0, px, py, 1, 1,
-                                         PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
-                    }
-                }
-            }
-        }
-
-        GL.BindTexture(TextureTarget.Texture2D, 0);
-        Console.WriteLine($"Random shapes placed: {shapeCount}");
-    }
-
-
-
+    // === DRAWING ===
     static void HandleDrawing(GameWindow window, Vector2 mousePos)
     {
         bool left = window.MouseState.IsButtonDown(MouseButton.Left);
         bool right = window.MouseState.IsButtonDown(MouseButton.Right);
 
         if ((left || right) && lastMousePos.HasValue)
-        {
             DrawLineCells(window, lastMousePos.Value, mousePos, left, brushSize);
-        }
         else if (left || right)
         {
-            // просто одна клетка под курсором
             int cx = (int)(mousePos.X / window.ClientSize.X * gridWidth);
             int cy = (int)((1.0f - mousePos.Y / window.ClientSize.Y) * gridHeight);
             SetCellWithBrush(cx, cy, left, brushSize);
         }
 
-        if (left || right)
-            lastMousePos = mousePos;
-        else
-            lastMousePos = null;
+        if (left || right) lastMousePos = mousePos;
+        else lastMousePos = null;
     }
-
 
     static void DrawLineCells(GameWindow window, Vector2 from, Vector2 to, bool alive, int brushSize)
     {
@@ -512,7 +554,6 @@ partial class Program
         }
     }
 
-
     static void SetCellWithBrush(int cx, int cy, bool alive, int brushSize)
     {
         byte a = (byte)(alive ? 255 : 0);
@@ -526,230 +567,45 @@ partial class Program
             {
                 int x = cx + dx, y = cy + dy;
                 if (x < 0 || y < 0 || x >= gridWidth || y >= gridHeight) continue;
-                byte[] px = new byte[] { a, t, 0, 255 };
+                byte[] px = { a, t, 0, 255 };
                 GL.TexSubImage2D(TextureTarget.Texture2D, 0, x, y, 1, 1,
-                                 PixelFormat.Rgba, PixelType.UnsignedByte, px);
+                    PixelFormat.Rgba, PixelType.UnsignedByte, px);
             }
-        GL.BindTexture(TextureTarget.Texture2D, 0);
     }
 
-
-    static void ResizeGameField(int newW, int newH)
+    // === INFO ===
+    static void PrintInfo()
     {
-        // --- создаём новые пустые текстуры ---
-        int newFront = CreateStateTexture(newW, newH, false);
-        int newBack = CreateStateTexture(newW, newH, false);
+        double now = DateTime.Now.Ticks / (double)TimeSpan.TicksPerSecond;
+        double dt = now - lastPrintTime;
 
-        ApplyTextureParams(newFront);
-        ApplyTextureParams(newBack);
-
-        // --- копируем данные из старой текстуры ---
-        if (stateTextureFront != 0)
+        if (dt >= 0.2)
         {
-            // читаем ВСЮ старую текстуру
-            byte[] oldData = new byte[gridWidth * gridHeight];
-            GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
-            GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
-            GL.GetTexImage(TextureTarget.Texture2D, 0,
-                           PixelFormat.Red, PixelType.UnsignedByte, oldData);
-
-            // вычисляем, сколько пикселей реально копировать
-            int copyW = Math.Min(gridWidth, newW);
-            int copyH = Math.Min(gridHeight, newH);
-
-            // создаём буфер под центральный блок
-            byte[] copyData = new byte[copyW * copyH];
-
-            for (int y = 0; y < copyH; y++)
-            {
-                Array.Copy(
-                    oldData,                // источник
-                    y * gridWidth,          // начало строки в старом поле
-                    copyData,               // приёмник
-                    y * copyW,              // начало строки в новом блоке
-                    copyW                   // сколько байт копировать
-                );
-            }
-
-            // вставляем в центр новой текстуры
-            GL.BindTexture(TextureTarget.Texture2D, newFront);
-            GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-            GL.TexSubImage2D(TextureTarget.Texture2D, 0,
-                             (newW - copyW) / 2, (newH - copyH) / 2,
-                             copyW, copyH,
-                             PixelFormat.Red, PixelType.UnsignedByte, copyData);
-            GL.BindTexture(TextureTarget.Texture2D, 0);
+            lastSpeed = stepCounterSpeed / dt;
+            stepCounterSpeed = 0;
+            lastPrintTime = now;
         }
 
-        // --- удаляем старые текстуры ---
-        if (stateTextureFront != 0) GL.DeleteTexture(stateTextureFront);
-        if (stateTextureBack != 0) GL.DeleteTexture(stateTextureBack);
+        Console.SetCursorPosition(0, 0);
+        for (int i = 0; i < 5; i++)
+            Console.WriteLine(new string(' ', Console.WindowWidth));
+        Console.SetCursorPosition(0, 0);
 
-        // --- подменяем ---
-        stateTextureFront = newFront;
-        stateTextureBack = newBack;
-        gridWidth = newW;
-        gridHeight = newH;
-
-        PrintInfo();
-        //Console.WriteLine($"Resized field: {gridWidth}x{gridHeight}");
+        Console.WriteLine($"Step: {stepCounter} | Speed: {lastSpeed:F1} steps/sec | Field: {gridWidth}x{gridHeight}");
+        Console.WriteLine($"Brush size: {brushSize}");
+        Console.WriteLine($"Paused: {(paused ? "Yes" : "No")}");
+        Console.WriteLine();
     }
 
-
-
-    static void DoSimulationStep()
-    {
-        GL.BindFramebuffer(FramebufferTarget.Framebuffer, framebuffer);
-        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
-                                TextureTarget.Texture2D, stateTextureBack, 0);
-        GL.DrawBuffer(DrawBufferMode.ColorAttachment0);
-
-        GL.Viewport(0, 0, gridWidth, gridHeight);
-
-        GL.UseProgram(updateShaderProgram);
-
-
-        //ToRefactor  (Можно кэшировать locRuleTex в window.Load, и тогда в шаге только BindTexture.)
-        int locRuleTex = GL.GetUniformLocation(updateShaderProgram, "ruleTex");
-        GL.ActiveTexture(TextureUnit.Texture1);
-        GL.BindTexture(TextureTarget.Texture2D, ruleTex);
-        GL.Uniform1(locRuleTex, 1);
-
-
-        int locState = GL.GetUniformLocation(updateShaderProgram, "currentState");
-        int locTexel = GL.GetUniformLocation(updateShaderProgram, "texelSize");
-
-        int locBirth = GL.GetUniformLocation(updateShaderProgram, "birthRules");
-        int locSurvival = GL.GetUniformLocation(updateShaderProgram, "survivalRules");
-
-        GL.Uniform1(locBirth, 9, birth);
-        GL.Uniform1(locSurvival, 9, survival);
-
-
-        GL.ActiveTexture(TextureUnit.Texture0);
-        GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
-        GL.Uniform1(locState, 0);
-        GL.Uniform2(locTexel, 1.0f / gridWidth, 1.0f / gridHeight);
-
-        GL.BindVertexArray(quadVAO);
-        GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
-
-        AddSteps();
-
-        //if (stepCounter % 10 == 0) // каждые 10 шагов, чтобы не спамить
-        //    Console.WriteLine($"Step {stepCounter}");
-
-        // swap Front <-> Back
-        (stateTextureFront, stateTextureBack) = (stateTextureBack, stateTextureFront);
-
-        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-    }
-
-    static void BlitToScreen(GameWindow window)
-    {
-        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-        GL.Viewport(0, 0, window.ClientSize.X, window.ClientSize.Y);
-
-        GL.ClearColor(0.05f, 0.05f, 0.07f, 1.0f);
-        GL.Clear(ClearBufferMask.ColorBufferBit);
-
-        GL.UseProgram(blitShaderProgram);
-        int locState2 = GL.GetUniformLocation(blitShaderProgram, "currentState");
-        GL.ActiveTexture(TextureUnit.Texture0);
-        GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
-        GL.Uniform1(locState2, 0);
-
-        int locTypeColors = GL.GetUniformLocation(blitShaderProgram, "typeColors");
-        GL.ActiveTexture(TextureUnit.Texture1);
-        GL.BindTexture(TextureTarget.Texture2D, typeColorTex);
-        GL.Uniform1(locTypeColors, 1);
-
-
-        GL.BindVertexArray(quadVAO);
-        GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
-    }
-
-    static void ResetGameField(bool randomInit)
-    {
-        if (stateTextureFront != 0) GL.DeleteTexture(stateTextureFront);
-        if (stateTextureBack != 0) GL.DeleteTexture(stateTextureBack);
-
-        stateTextureFront = CreateStateTexture(gridWidth, gridHeight, randomInit);
-        stateTextureBack = CreateStateTexture(gridWidth, gridHeight, false);
-
-        ApplyTextureParams(stateTextureFront);
-        ApplyTextureParams(stateTextureBack);
-    }
-
-    static void ApplyTextureParams(int tex)
-    {
-        GL.BindTexture(TextureTarget.Texture2D, tex);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
-
-        GL.BindTexture(TextureTarget.Texture2D, 0);
-    }
-
-    static void SetCellState(GameWindow window, Vector2 mousePos, bool alive)
-    {
-        // экран -> [0..1]
-        float nx = mousePos.X / window.ClientSize.X;
-        float ny = 1.0f - mousePos.Y / window.ClientSize.Y;
-
-        // [0..1] -> координаты клетки
-        int cellX = (int)(nx * gridWidth);
-        int cellY = (int)(ny * gridHeight);
-        if (cellX < 0 || cellY < 0 || cellX >= gridWidth || cellY >= gridHeight) return;
-
-        byte value = alive ? (byte)255 : (byte)0;
-
-        GL.BindTexture(TextureTarget.Texture2D, stateTextureFront);
-        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1); // 1 байт на пиксель
-        GL.TexSubImage2D(TextureTarget.Texture2D, 0, cellX, cellY, 1, 1,
-                         PixelFormat.Red, PixelType.UnsignedByte, new byte[] { value });
-        GL.BindTexture(TextureTarget.Texture2D, 0);
-    }
-
-    static int CreateStateTexture(int w, int h, bool randomInit)
-    {
-        int tex = GL.GenTexture();
-        GL.BindTexture(TextureTarget.Texture2D, tex);
-
-        // выделяем R8
-        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, w, h, 0,
-               PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
-
-        // заполнение:
-        byte[] data = new byte[w * h * 4];
-        if (randomInit)
-        {
-            var rnd = new Random();
-            for (int i = 0; i < w * h; i++)
-            {
-                bool alive = rnd.Next(2) == 0;
-                byte type = (byte)(rnd.Next(3)); // 0..2 для примера
-                data[i * 4 + 0] = (byte)(alive ? 255 : 0); // R alive
-                data[i * 4 + 1] = type;                    // G type
-                data[i * 4 + 2] = 0;                       // B (свободно)
-                data[i * 4 + 3] = 255;                     // A
-            }
-        }
-        GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, w, h,
-                         PixelFormat.Rgba, PixelType.UnsignedByte, data);
-
-        GL.BindTexture(TextureTarget.Texture2D, 0);
-        return tex;
-    }
-
+    // === UTILS ===
     static int CompileShader(string source, ShaderType type)
     {
         int id = GL.CreateShader(type);
-        GL.ShaderSource(id, EnsureTrailingNewline(source)); // страховка: \n на конце
+        GL.ShaderSource(id, EnsureTrailingNewline(source));
         GL.CompileShader(id);
         GL.GetShader(id, ShaderParameter.CompileStatus, out int ok);
-        if (ok == 0) throw new Exception($"Shader compile error [{type}]:\n{GL.GetShaderInfoLog(id)}");
+        if (ok == 0)
+            throw new Exception($"Shader compile error [{type}]:\n{GL.GetShaderInfoLog(id)}");
         return id;
     }
 
@@ -760,11 +616,11 @@ partial class Program
         GL.AttachShader(prog, frag);
         GL.LinkProgram(prog);
         GL.GetProgram(prog, GetProgramParameterName.LinkStatus, out int ok);
-        if (ok == 0) throw new Exception($"Program link error:\n{GL.GetProgramInfoLog(prog)}");
+        if (ok == 0)
+            throw new Exception($"Program link error:\n{GL.GetProgramInfoLog(prog)}");
         return prog;
     }
 
-    // Вшитые ресурсы: "Shaders.filename.ext"
     static string LoadEmbedded(string relative)
     {
         var asm = Assembly.GetExecutingAssembly();
@@ -773,13 +629,12 @@ partial class Program
 
         using Stream? s = asm.GetManifestResourceStream(resName);
         if (s == null)
-        {
-            var list = string.Join("\n", asm.GetManifestResourceNames());
-            throw new FileNotFoundException($"Embedded resource '{resName}' not found.\nAvailable:\n{list}");
-        }
+            throw new FileNotFoundException($"Embedded resource '{resName}' not found.\n" +
+                $"Available:\n{string.Join("\n", asm.GetManifestResourceNames())}");
         using var r = new StreamReader(s);
         return r.ReadToEnd();
     }
 
-    static string EnsureTrailingNewline(string text) => text.EndsWith("\n") ? text : (text + "\n");
+    static string EnsureTrailingNewline(string text)
+        => text.EndsWith("\n") ? text : text + "\n";
 }
